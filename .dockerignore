@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+venv
+rit
+__pycache__
+.pytest_cache
+mlruns
+tests
+*.log
+.DS_Store

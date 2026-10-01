@@ -1,0 +1,87 @@
+name: MLOps Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "data/**"
+      - "src/**"
+      - "tests/**"
+      - "app/**"
+      - "Dockerfile"
+      - "requirements.txt"
+      - ".github/workflows/mlops.yml"
+
+jobs:
+  test-and-train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate data
+        run: python -m src.validate_data
+
+      - name: Run tests and train model
+        run: pytest -q
+
+      - name: Upload MLflow runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-runs
+          path: mlruns/
+
+      - name: Upload trained model
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-model
+          path: model/model.pkl
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: test-and-train
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download trained model
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-model
+          path: model
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build image
+        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/mlops-house-price:latest .
+
+      - name: Push image
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/mlops-house-price:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - name: Deploy to Amazon Linux EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/mlops-house-price:latest
+            sudo docker stop mlops-house-price || true
+            sudo docker rm mlops-house-price || true
+            sudo docker run -d               --name mlops-house-price               -p 80:8000               ${{ secrets.DOCKERHUB_USERNAME }}/mlops-house-price:latest
+            sudo docker ps
+            sudo docker logs --tail 20 mlops-house-price
